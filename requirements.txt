@@ -1,0 +1,12 @@
+
+torch>=2.0.0
+transformers
+accelerate
+peft
+bitsandbytes
+nuscenes-devkit
+opencv-python
+pillow
+tqdm
+matplotlib
+qwen-vl-utils
