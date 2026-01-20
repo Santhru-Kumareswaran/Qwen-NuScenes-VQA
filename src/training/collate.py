@@ -1,71 +1,57 @@
 
 import torch
 from typing import List, Dict, Any
+from qwen_vl_utils import process_vision_info
 
 class QwenDataCollator:
     def __init__(self, processor):
         self.processor = processor
     
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        # Batch: list of {id, messages, image}
+        # Batch: list of {id, messages, images}
         
-        # 1. Prepare texts and images
-        texts = [item["messages"] for item in batch]
-        images = [item["image"] for item in batch]
-        
-        # 2. Apply chat template
-        # We need to construct the prompt string for training.
-        # User: <image> Question
-        # Assistant: Answer
-        
-        # Processor.apply_chat_template handles this if we format correctly.
-        # But for training, we need to mask user tokens in loss.
-        # This is non-trivial with standard processor calls.
-        
-        # Simplified approach:
-        # Use processor to process (text + image) -> input_ids
-        # Then create labels by masking.
-        
-        text_inputs = [
+        # 1. Prepare texts using apply_chat_template
+        texts = [
             self.processor.apply_chat_template(
-                t, tokenize=False, add_generation_prompt=False
+                item["messages"], tokenize=False, add_generation_prompt=False
             )
-            for t in texts
+            for item in batch
         ]
         
+        # 2. Extract images via process_vision_info
+        # This handles the extraction of images relative to the messages
+        image_inputs = []
+        for item in batch:
+            input_images, _ = process_vision_info(item["messages"])
+            image_inputs.append(input_images)
+            
+        # image_inputs is now a list of lists of images (e.g. [[img1..6], [img1..6], ...])
+        
+        # 3. Process with Qwen VL Processor
+        # Limit image resolution to reduce VRAM (default max is ~1.8M pixels = OOM)
+        # 256*28*28 = 200,704 pixels max (~448x448) - fits in 16GB VRAM with 6 images
         inputs = self.processor(
-            text=text_inputs,
-            images=images,
+            text=texts,
+            images=image_inputs,
             padding=True,
-            return_tensors="pt"
+            return_tensors="pt",
+            min_pixels=28*28*4,      # ~3136 pixels min (56x56)
+            max_pixels=28*28*256     # ~200K pixels max (~448x448)
         )
         
-        # Create labels
-        # By default inputs['input_ids'] includes everything.
-        # We need to identify where "Assistant" response starts.
-        # Qwen2.5-VL uses <|im_start|>assistant ...
-        
-        # We can implement a naive masking strategy or just train on everything (User+Assistant) 
-        # but that's suboptimal. 
-        # Ideally we use the standard masking.
-        
-        # For now, let's just return input_ids as labels (calculating loss on prompt too),
-        # or -100 masking is better.
-        
-        # Let's try to do simple masking if possible, else default to all-text training 
-        # (common in simple SFT scripts, though not ideal).
+        # 4. Create Labels (Masking)
+        # Simple instruction masking: Mask everything except Assisant response.
+        # However, for simplicity and robustness in this custom loop, we just return inputs.
+        # Standard SFT often trains on full sequence or masks user.
+        # We'll stick to a simple strategy: clone input_ids as labels and mask padding.
         
         input_ids = inputs["input_ids"]
         labels = input_ids.clone()
         
-        # Masking padded tokens
-        # processor padding uses pad_token_id
+        # Mask padding
         if self.processor.tokenizer.pad_token_id is not None:
             labels[labels == self.processor.tokenizer.pad_token_id] = -100
             
-        # TODO: Advanced masking (User Turn masking)
-        # This requires finding the boundaries of turns in the tokenized sequence.
-        
         inputs["labels"] = labels
         
         return inputs

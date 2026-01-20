@@ -13,14 +13,24 @@ from configs.constants import VIEW_ORDER
 from data.montage import MontageBuilder
 
 def load_json_any(path: str):
-    """Load JSON from file or JSONL format."""
+    """Load JSON from file - supports both regular JSON and JSONL format."""
     with open(path, "r", encoding="utf-8") as f:
-        first = f.read(1)
-        f.seek(0)
-        if first == "[":
-            return json.load(f)
-        else:
-            return [json.loads(line) for line in f if line.strip()]
+        content = f.read().strip()
+        
+    # Try regular JSON first (array or object)
+    if content.startswith("[") or content.startswith("{"):
+        try:
+            data = json.loads(content)
+            # If it's a dict, wrap in list
+            if isinstance(data, dict):
+                return [data]
+            return data
+        except json.JSONDecodeError:
+            pass
+    
+    # Fallback to JSONL (one JSON object per line)
+    lines = content.split("\n")
+    return [json.loads(line) for line in lines if line.strip()]
 
 class QwenNuDataset(Dataset):
     """
@@ -34,7 +44,8 @@ class QwenNuDataset(Dataset):
         nusc: Optional[NuScenes] = None,
         view_order: Sequence[str] = VIEW_ORDER,
         max_samples: Optional[int] = None,
-        montage_builder: Optional[MontageBuilder] = None
+        montage_builder: Optional[MontageBuilder] = None,
+        system_prompt: str = ""
     ):
         self.rows = []
         for jp in json_paths:
@@ -50,6 +61,7 @@ class QwenNuDataset(Dataset):
         self.nusc = nusc
         self.view_order = view_order
         self.montage_builder = montage_builder or MontageBuilder()
+        self.system_prompt = system_prompt
         
     def _resolve_paths(self, sample_token: str) -> Dict[str, np.ndarray]:
         """
@@ -89,35 +101,45 @@ class QwenNuDataset(Dataset):
         row = self.rows[idx]
         sample_token = row.get("sample_token")
         
-        # Load Images and Create Montage
-        images = self._resolve_paths(sample_token)
-        montage = self.montage_builder.create_montage(images)
+        # Load Images as dict: {view_name: np_array}
+        images_dict = self._resolve_paths(sample_token)
+        
+        # Create SINGLE montage image (6 cameras stitched into 2x3 grid with labels)
+        # This uses VIEW_ORDER from constants which has the correct layout
+        montage_pil = self.montage_builder.create_montage(images_dict)
         
         question = row.get("question", "")
         answer = row.get("answer", "")
         
-        # Format for Qwen2.5-VL
-        # We perform template construction here
-        messages = [
-            {
+        # Build user content with SINGLE montage image
+        user_content = [
+            {"type": "image", "image": montage_pil},  # Single stitched image
+            {"type": "text", "text": question}
+        ]
+        
+        # Format for Qwen VL
+        messages = []
+        if self.system_prompt:
+             messages.append({
+                 "role": "system",
+                 "content": [{"type": "text", "text": self.system_prompt}]
+             })
+             
+        messages.append({
                 "role": "user",
-                "content": [
-                    {"type": "image", "image": montage},
-                    {"type": "text", "text": question}
-                ]
-            },
-            {
+                "content": user_content
+            })
+        messages.append({
                 "role": "assistant",
                 "content": [
                     {"type": "text", "text": answer}
                 ]
-            }
-        ]
+            })
         
         return {
             "id": sample_token,
             "messages": messages,
-            "image": montage # Keep raw image accessible if needed
+            "images": [montage_pil]  # Single image list
         }
 
 def make_collate(processor):

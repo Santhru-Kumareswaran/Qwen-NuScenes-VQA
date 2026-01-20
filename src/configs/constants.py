@@ -4,7 +4,7 @@
 # Camera definitions
 VIEW_ORDER = [
     "CAM_FRONT_LEFT", "CAM_FRONT", "CAM_FRONT_RIGHT",
-    "CAM_BACK_LEFT", "CAM_BACK", "CAM_BACK_RIGHT"
+    "CAM_BACK_RIGHT", "CAM_BACK", "CAM_BACK_LEFT"
 ]
 
 # Grid Layout (Rows, Cols)
@@ -40,5 +40,5 @@ FONT_SCALE = 1.0
 FONT_THICKNESS = 2
 
 # Model
-MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
+MODEL_ID = "Qwen/Qwen3-VL-2B-THinking"
 MAX_LENGTH = 2048

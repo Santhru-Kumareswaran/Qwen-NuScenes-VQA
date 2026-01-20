@@ -11,12 +11,22 @@ def save_checkpoint(
     step, 
     loss, 
     output_dir: Path,
-    keep_last_n=3
+    keep_last_n=3,
+    is_best=False
 ):
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Create step-specific folder
-    ckpt_dir = output_dir / f"checkpoint-{step}"
+    if is_best:
+        ckpt_dir = output_dir / "checkpoint-best"
+    else:
+        ckpt_dir = output_dir / f"checkpoint-{step}"
+    
+    # Remove existing best if overwriting
+    if is_best and ckpt_dir.exists():
+        import shutil
+        shutil.rmtree(ckpt_dir)
+        
     ckpt_dir.mkdir(exist_ok=True)
     
     # Save Model (LoRA adapters)
@@ -32,10 +42,13 @@ def save_checkpoint(
         'loss': loss
     }, ckpt_dir / "trainer_state.pt")
     
-    # Rotate checkpoints
-    if keep_last_n > 0:
+    # Rotate checkpoints (ONLY for regular checkpoints)
+    if not is_best and keep_last_n > 0:
         # Find all checkpoint folders
-        ckpts = sorted(output_dir.glob("checkpoint-*"), key=lambda p: p.stat().st_mtime)
+        # Exclude checkpoint-best from rotation
+        all_ckpts = sorted(output_dir.glob("checkpoint-*"), key=lambda p: p.stat().st_mtime)
+        ckpts = [p for p in all_ckpts if "best" not in p.name]
+        
         if len(ckpts) > keep_last_n:
             to_remove = ckpts[:-keep_last_n]
             for folder in to_remove:
@@ -43,7 +56,7 @@ def save_checkpoint(
                 shutil.rmtree(folder)
                 print(f"Removed old checkpoint {folder}")
                 
-    print(f"Saved checkpoint to {ckpt_dir}")
+    print(f"Saved checkpoint to {ckpt_dir} ({'BEST' if is_best else 'Regular'})")
 
 def load_checkpoint(model, optimizer, scheduler, ckpt_dir: Path):
     # Load adapters

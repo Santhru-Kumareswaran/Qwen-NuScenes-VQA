@@ -28,16 +28,25 @@ wheels/
 .vscode/
 *.code-workspace
 
-# Project Specific
+# Project Specific - Training Artifacts
 checkpoints/
 output/
 logs/
 *.log
 tboard_logs/
 wandb/
+plots/
+inferences/
+
+# Large Data Files (don't commit)
+*.json
+!src/**/*.json
+scripts/sample_montage.png
 
 # OS
 .DS_Store
 Thumbs.db
 
+# Data directories
 /DATA/*
+/data/*

@@ -1,6 +1,9 @@
 
 import sys
 import os
+# Fix OOM fragmentation
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import torch
 import glob
 from pathlib import Path
@@ -28,66 +31,80 @@ except ImportError:
 def get_training_config() -> dict:
     """
     Get comprehensive training configuration.
-    Modified to be standalone config like the reference implementation.
+    Optimized for RTX 5080 Laptop GPU (16GB VRAM) with QLoRA and Flash Attention 2.
+    
+    System specs:
+    - GPU: RTX 5080 Laptop (16GB VRAM, Compute Cap 12.0)
+    - CPU: Intel Core Ultra 9 275HX (24 cores)
+    - RAM: 30GB
     """
     config = {
         # ──────────────────────────────────────────────────────────────────
+        # DEBUG MODE - Set to True for verbose logging during testing
+        # ──────────────────────────────────────────────────────────────────
+        "debug": False,           # Disabled for production run
+        
+        # ──────────────────────────────────────────────────────────────────
         # I/O Paths
         # ──────────────────────────────────────────────────────────────────
-        # Hardcoded paths from predecessor codebase (LiDAR-Vision-VQA/src/encoder-decoder/train.py) # Do not change
-        "data_root": "/home/j_bindu/fyp-26-grp-38/Dataset_subset/external",
-        "nusc_root": "/home/j_bindu/fyp-26-grp-38/Dataset_subset",
+        "data_root": "/home/santhru/FYP38_First Experiment/NuScenesVQA-/scripts",
+        "nusc_root": "/media/santhru/Extreme SSD1/Nuscenes Dataset/Dataset/train",
         "output_dir": "./checkpoints",
         
         # ──────────────────────────────────────────────────────────────────
-        # Data Config
+        # Data Config (~50k samples)
         # ──────────────────────────────────────────────────────────────────
-        "max_samples": None,      # Debug: Limit to N samples (None = all)
-        "val_split": 0.1,         # 10% for validation
-        "num_workers": 8,         # 28 Cores available -> Use 8
-        "prefetch_factor": 2,     # Buffer size
+        "max_samples": None,      # Use ALL samples (~50k) - set to int for testing
+        "val_split": 0.1,         # 10% for validation (~5k val, ~45k train)
+        "num_workers": 8,
+        "prefetch_factor": 1,
         
         # ──────────────────────────────────────────────────────────────────
-        # Training Config
+        # Training Config for Long Run (50 epochs, ~50k samples)
+        # Steps per epoch: ~45000 / 16 = ~2812 steps/epoch
+        # Total steps: 2812 * 50 = ~140,600 steps
         # ──────────────────────────────────────────────────────────────────
-        "epochs": 20,
-        "batch_size": 1,          # V100 16GB: 1 is best for 3B VL model with large images
-        "grad_accum": 16,         # Effective batch size = 1 * 16 = 16
+        "epochs": 50,             # 50 epochs (can stop anytime)
+        "batch_size": 2,
+        "grad_accum": 8,          # Effective batch size: 16
         "lr": 2e-4,
         "weight_decay": 0.01,
-        "warmup_steps": 2000,     # ~10% of total steps (48k samples -> ~3k steps/epoch -> 60k steps -> 2k warmup is conservative)
-        "save_steps": 1000,
-        "keep_last_n": 3,
-        "plot_every": 1,
+        "warmup_steps": 3000,     # ~1 epoch warmup (good for long runs)
+        "save_steps": 500,        # Frequent saves for resumability (~6 saves/epoch)
+        "keep_last_n": 5,         # Keep more checkpoints for safety
+        "plot_every": 500,        # Plot every 500 steps
+        "val_every_steps": 1400,  # Validate every half-epoch (~2812/2 = 1406)
         "gradient_checkpointing": True,
         
-        "resume": False,          # Resume from latest checkpoint
-        "resume_from_best": False,# Not implemented in simplified trainer yet, default to latest
+        "resume": False,          # Set to True to resume from latest checkpoint
+        "resume_from_best": False,
         
         # ──────────────────────────────────────────────────────────────────
-        # Model Config
+        # Model Config (Optimized for RTX 5080)
         # ──────────────────────────────────────────────────────────────────
-        "model_id": "Qwen/Qwen2.5-VL-3B-Instruct",
-        "use_4bit": False,        # False = float16, True = QLoRA (nf4)
-        "use_flash_attn": False,  # Not supported
-        "system_prompt": "You are an autonomous driving assistant. Analyze the camera images to answer questions about the driving environment, traffic rules, and scene details accurately.",
+        "model_id": "Qwen/Qwen3-VL-2B-Instruct",
+        "use_4bit": True,
+        "use_flash_attn": False,
+        "use_8bit_optimizer": True,
+        "system_prompt": "You are an autonomous driving assistant. Analyze the camera images to answer questions about the driving environment, traffic rules, and scene details accurately.\n\nThinking Process:\n1. Analyze input images (Front-Left, Front, Front-Right, Back-Left, Back, Back-Right).\n2. Identify key objects and road conditions.\n3. Reason about the user question step-by-step.\n4. Formulate the final answer.",
         "max_ans_toks": 256,
         
-        # LoRA Config
-        "lora_r": 2,
-        "lora_alpha": 4,
-        "lora_dropout": 0.3,
+        # QLoRA Config
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.1,
         "llm_lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         
         # ──────────────────────────────────────────────────────────────────
         # Inference Config
         # ──────────────────────────────────────────────────────────────────
-        "inference_sampling_every": 500, # Steps 
+        "inference_sampling_every_epochs": 5,  # Run inference every 5 epochs
         "inference_samples_n": 4, 
         "inference_max_tokens": 256,
-        "inference_temperature": 0.0,
-        "inference_do_sample": False,
+        "inference_temperature": 0.7,
+        "inference_do_sample": True,
         "inference_num_beams": 1,
+        "inference_sampling_every": 14000,     # Every 5 epochs (~2812 * 5)
         
         # ──────────────────────────────────────────────────────────────────
         # Metrics
@@ -99,10 +116,15 @@ def get_training_config() -> dict:
     }
     return config
 
+
 def find_json_files(root_path):
     # Search for both *_response.json and standard .json files
     files = glob.glob(str(Path(root_path) / "**" / "*_response.json"), recursive=True)
     files += glob.glob(str(Path(root_path) / "**" / "*.json"), recursive=True)
+    
+    # Filter out checkpoints and runs to avoid reading log files as data
+    files = [f for f in files if "checkpoints" not in f and "run_" not in f]
+    
     return sorted(list(set(files))) # Remove duplicates
 
 def setup_output_directory(config: dict) -> Path:
@@ -128,9 +150,14 @@ def setup_output_directory(config: dict) -> Path:
         
         for idx, run_dir in enumerate(valid_runs, start=1):
             # Find latest checkpoint
-            ckpts = sorted(run_dir.glob("checkpoint-*"), key=lambda p: int(p.name.split('-')[-1]))
+            ckpts = sorted(run_dir.glob("checkpoint-*"), key=lambda p: int(p.name.split('-')[-1]) if p.name.split('-')[-1].isdigit() else 0)
             latest = ckpts[-1] if ckpts else "?"
-            print(f"  [{idx}] {run_dir.name} (Latest: {latest.name if isinstance(latest, Path) else latest})")
+            
+            # Check for best
+            best_ckpt = run_dir / "checkpoint-best"
+            has_best = " (Has Best)" if best_ckpt.exists() else ""
+            
+            print(f"  [{idx}] {run_dir.name} (Latest: {latest.name if isinstance(latest, Path) else latest}){has_best}")
             
         print("=" * 80)
         
@@ -143,8 +170,22 @@ def setup_output_directory(config: dict) -> Path:
                 elif 1 <= idx <= len(valid_runs):
                     selected = valid_runs[idx-1]
                     print(f"Resuming from: {selected}")
+                    
+                    resume_from_best = config.get("resume_from_best", False)
+                    best_ckpt = selected / "checkpoint-best"
+                    
+                    if resume_from_best:
+                        if best_ckpt.exists():
+                            print("Resuming from BEST checkpoint.")
+                            return selected, best_ckpt
+                        else:
+                            print("Warning: resume_from_best=True but no 'checkpoint-best' found. Falling back to latest.")
+                    
                     # Find latest checkpoint automatically
-                    ckpts = sorted(selected.glob("checkpoint-*"), key=lambda p: int(p.name.split('-')[-1]))
+                    ckpts = sorted(selected.glob("checkpoint-*"), key=lambda p: int(p.name.split('-')[-1]) if p.name.split('-')[-1].isdigit() else 0)
+                    # Filter out non-step checkpoints if mixed (though sorted should handle it if careful, best to filter)
+                    ckpts = [p for p in ckpts if p.name != "checkpoint-best"]
+                    
                     if ckpts:
                         return selected, ckpts[-1]
                     else:
@@ -173,7 +214,9 @@ def main():
     print("="*80)
     print(f"Model: {config['model_id']}")
     print(f"Data Root: {config['data_root']}")
-    print(f"Dtype: {'4-bit NF4' if config['use_4bit'] else 'float16'}")
+    print(f"Mode: {'QLoRA (4-bit NF4 + bf16)' if config['use_4bit'] else 'LoRA (bf16)'}")
+    print(f"Flash Attention 2: {'Enabled' if config['use_flash_attn'] else 'Disabled'}")
+    print(f"8-bit Optimizer: {'Enabled' if config.get('use_8bit_optimizer', False) else 'Disabled'}")
     print("="*80)
 
     # 3. Setup Data
@@ -191,10 +234,12 @@ def main():
         print("No data found! Exiting.")
         return
 
+    system_prompt = config.get("system_prompt", "")
     dataset = QwenNuDataset(
         json_paths=json_paths,
         nusc=nusc,
-        max_samples=config['max_samples']
+        max_samples=config['max_samples'],
+        system_prompt=system_prompt
     )
     print(f"Dataset size: {len(dataset)}")
     
@@ -244,10 +289,27 @@ def main():
         pin_memory=True
     )
     
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
+    # Use 8-bit Adam optimizer for memory savings (optional)
+    if config.get('use_8bit_optimizer', False):
+        try:
+            import bitsandbytes as bnb
+            optimizer = bnb.optim.AdamW8bit(
+                model.parameters(), 
+                lr=config['lr'], 
+                weight_decay=config['weight_decay']
+            )
+            print("[Optimizer] Using 8-bit AdamW (bitsandbytes)")
+        except ImportError:
+            print("[Optimizer] bitsandbytes not available, using standard AdamW")
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
     
     # Initial Scheduler (Linear Warmup)
-    total_steps = len(train_loader) // config['grad_accum'] * config['epochs']
+    # Use ceil to account for the final step in each epoch if len(train_loader) is not divisible by grad_accum
+    import math
+    num_update_steps_per_epoch = math.ceil(len(train_loader) / config['grad_accum'])
+    total_steps = num_update_steps_per_epoch * config['epochs']
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, 
         max_lr=config['lr'], 

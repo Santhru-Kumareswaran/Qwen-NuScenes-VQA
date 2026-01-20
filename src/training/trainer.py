@@ -34,10 +34,23 @@ class QwenTrainer:
         self.device = model.device
         
         self.step_losses = []
+        self.val_step_losses = [] # Track val loss per step
+        self.val_steps = []
         self.epoch_losses = []
+        self.best_val_loss = float('inf')
         
+        
+        # Research-grade tracking
+        self.lr_history = []        # Learning rate at each step
+        self.grad_norms = []        # Gradient norms at each step
+        self.epoch_stats = []       # Epoch-level statistics
         # Grad accum
         self.grad_accum = self.config.get("grad_accum", 1)
+        
+        # Debug mode
+        self.debug = self.config.get("debug", False)
+        if self.debug:
+            print("[DEBUG MODE ENABLED] Verbose logging active")
 
         # ------------------------------------------------------------------
         # FEATURE: Cast Trainable Params to FP32 (Stability)
@@ -95,12 +108,20 @@ class QwenTrainer:
         self.model.train()
         
         for epoch in range(start_epoch, epochs):
+            steps_per_epoch = len(self.train_loader) // self.grad_accum
+            print(f"\n{'='*60}")
             print(f"Epoch {epoch+1}/{epochs}")
-            epoch_loss = 0
-            steps_in_epoch = 0
+            print(f"  Steps in epoch: {steps_per_epoch}")
+            print(f"  Global step: {global_step}")
+            if self.debug:
+                print(f"  [DEBUG] Train loader batches: {len(self.train_loader)}")
+                print(f"  [DEBUG] Grad accum: {self.grad_accum}")
+            print(f"{'='*60}")
             
             pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}")
             
+            epoch_loss = 0
+            steps_in_epoch = 0
             # Reset gradients at start of epoch
             self.optimizer.zero_grad()
             
@@ -118,6 +139,14 @@ class QwenTrainer:
                 # Update weights every grad_accum steps
                 if (step_idx + 1) % self.grad_accum == 0:
                     # Clip gradients if needed (optional, good practice)
+                    # Compute gradient norm BEFORE clipping (research)
+                    total_norm = 0.0
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            total_norm += p.grad.data.norm(2).item() ** 2
+                    total_norm = total_norm ** 0.5
+                    self.grad_norms.append(total_norm)
+
                     nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                     
                     self.optimizer.step()
@@ -131,8 +160,15 @@ class QwenTrainer:
                     self.step_losses.append(current_loss)
                     epoch_loss += current_loss
                     steps_in_epoch += 1 # Count effective steps
+                    # Track LR
+                    current_lr = self.optimizer.param_groups[0]['lr']
+                    self.lr_history.append(current_lr)
+                    pbar.set_postfix({"loss": f"{current_loss:.4f}", "step": global_step, "lr": f"{current_lr:.2e}"})
                     
-                    pbar.set_postfix({"loss": f"{current_loss:.4f}"})
+                    # Debug: Print every batch
+                    if self.debug and global_step % 10 == 0:
+                        lr = self.optimizer.param_groups[0]['lr']
+                        print(f"\n[DEBUG] Step {global_step}: loss={current_loss:.4f}, lr={lr:.2e}")
                     
                     # Save checkpoint every N steps (Using global_step)
                     if global_step > 0 and global_step % self.config.get("save_steps", 1000) == 0:
@@ -143,11 +179,46 @@ class QwenTrainer:
                         )
                         # Plot
                         if self.config.get("plot_every", 1) > 0:
-                            plot_step_loss(self.step_losses, self.output_dir / "plots")
+                            if self.debug:
+                                print(f"[DEBUG] Saving checkpoint and plotting at step {global_step}")
+                            plot_step_loss(
+                                self.step_losses, 
+                                self.output_dir / "plots", 
+                                val_steps=self.val_steps, 
+                                val_losses=self.val_step_losses
+                            )
+                    
+                    # Periodic Validation (Step-level)
+                    if self.config.get("val_every_steps") and global_step % self.config["val_every_steps"] == 0:
+                        val_loss = self.run_validation(epoch)
+                        if val_loss is not None:
+                            self.val_step_losses.append(val_loss)
+                            self.val_steps.append(global_step)
+                            plot_step_loss(
+                                self.step_losses, 
+                                self.output_dir / "plots", 
+                                val_steps=self.val_steps, 
+                                val_losses=self.val_step_losses
+                            )
+                            
+                            # Check for Best Checkpoint (Step Level)
+                            if val_loss < self.best_val_loss:
+                                print(f"New best validation loss: {val_loss:.4f} (was {self.best_val_loss:.4f})")
+                                self.best_val_loss = val_loss
+                                save_checkpoint(
+                                    self.model, self.processor, self.optimizer, self.scheduler,
+                                    epoch, global_step, val_loss, self.output_dir,
+                                    keep_last_n=self.config.get("keep_last_n", 3),
+                                    is_best=True
+                                )
+                                
+                                
+                        self.model.train()
+                        torch.cuda.empty_cache()
                             
                     # Inference Sampling (Placeholder for loop)
                     if global_step > 0 and global_step % self.config.get("inference_sampling_every", 999999) == 0:
-                        self.run_inference_sampling(global_step)
+                        self.run_inference_sampling(epoch + 1, global_step)
 
             # Handle remaining gradients
             if (step_idx + 1) % self.grad_accum != 0:
@@ -165,6 +236,11 @@ class QwenTrainer:
             # Run Validation
             val_loss = self.run_validation(epoch)
             
+            # Run Inference Sampling every N epochs
+            inference_epoch_freq = self.config.get("inference_sampling_every_epochs", 5)
+            if (epoch + 1) % inference_epoch_freq == 0:
+                self.run_inference_sampling(epoch + 1, global_step)
+            
             # Save end of epoch
             save_checkpoint(
                 self.model, self.processor, self.optimizer, self.scheduler,
@@ -172,6 +248,17 @@ class QwenTrainer:
                 keep_last_n=self.config.get("keep_last_n", 3)
             )
             plot_loss_curve(self.epoch_losses, [val_loss] if val_loss else [], [epoch+1] if val_loss else [], self.output_dir / "plots")
+            
+            # Save Best Checkpoint
+            if val_loss is not None and val_loss < self.best_val_loss:
+                print(f"New best validation loss: {val_loss:.4f} (was {self.best_val_loss:.4f})")
+                self.best_val_loss = val_loss
+                save_checkpoint(
+                    self.model, self.processor, self.optimizer, self.scheduler,
+                    epoch + 1, global_step, val_loss, self.output_dir,
+                    keep_last_n=self.config.get("keep_last_n", 3),
+                    is_best=True
+                )
             
     def run_validation(self, epoch):
         if not self.val_loader:
@@ -198,16 +285,16 @@ class QwenTrainer:
         self.model.train()
         return avg_val_loss
         
-    def run_inference_sampling(self, step):
+    def run_inference_sampling(self, epoch, step):
         """
-        Run qualitative inference sampling and calculate metrics (BLEU-4, CIDr).
-        Uses validation dataset subset for speed if large.
+        Run qualitative inference sampling.
         """
         if not self.val_loader:
             return
             
-        print(f"\n[Inference] Running sampling at step {step}...")
+        print(f"\n[Inference] Running sampling at epoch {epoch}, step {step}...")
         self.model.eval()
+        torch.cuda.empty_cache() # Start with clean slate
         
         n_samples = self.config.get("inference_samples_n", 5)
         # 1. Select Random subset (or first N)
@@ -252,19 +339,28 @@ class QwenTrainer:
         
         print(f"Generating for {len(indices)} samples...")
         
+        generated_captions = []
+        ground_truths = []
+        inference_results = []
+        
+        import json
+        from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+        
         for idx in indices:
-            item = ds_source[idx] # Returns {id, messages, image}
+            with torch.no_grad():
+                item = ds_source[idx] # Returns {id, messages, image}
             
             # Extract inputs
-            image = item["image"]
+            image = item["images"][0] # dataset returns list of images
             messages = item["messages"] # User + Assistant
             
-            # Construct Prompt (User only)
-            user_msg = messages[0] # {role: user, content: [image, text]}
-            gt_answer = messages[1]["content"][0]["text"]
+            # Construct Prompt (Filter out Assistant answer)
+            conversation = [msg for msg in messages if msg['role'] != 'assistant']
+            gt_msg = next((msg for msg in reversed(messages) if msg['role'] == 'assistant'), None)
+            gt_answer = gt_msg["content"][0]["text"] if gt_msg else "UNKNOWN"
             
             # Process for Inference
-            text = self.processor.apply_chat_template([user_msg], tokenize=False, add_generation_prompt=True)
+            text = self.processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
             
             inputs = self.processor(
                 text=[text],
@@ -275,7 +371,6 @@ class QwenTrainer:
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             
             # Generate
-            # max_new_tokens from config
             generated_ids = self.model.generate(
                 **inputs,
                 max_new_tokens=self.config.get("inference_max_tokens", 128),
@@ -286,23 +381,65 @@ class QwenTrainer:
             
             # Trim input tokens
             generated_ids_trimmed = [
-                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
             ]
             
             output_text = self.processor.batch_decode(
                 generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
             )[0]
             
-            print(f"\n[Sample {item['id']}]")
-            print(f"Q: {user_msg['content'][1]['text']}")
-            print(f"GT: {gt_answer}")
-            print(f"Pred: {output_text}")
+            # Calculate Per-Sample Metrics
+            chencherry = SmoothingFunction()
+            # Basic whitespace tokenization for BLEU check
+            ref_tokens = [gt_answer.split()] 
+            hyp_tokens = output_text.split()
+            bleu4 = sentence_bleu(ref_tokens, hyp_tokens, smoothing_function=chencherry.method1)
+            
+            # Log to file and console
+            log_entry = f"\n[Sample {item['id']}]\nQ: {user_msg['content'][1]['text']}\nGT: {gt_answer}\nPred: {output_text}\nBLEU-4: {bleu4:.4f}\n"
+            print(log_entry)
+            
+            # Save string log
+            with open(self.output_dir / "inference_log.txt", "a") as f:
+                f.write(log_entry)
             
             generated_captions.append(output_text)
             ground_truths.append(gt_answer)
             
-        # Calculate Metrics
-        scores = compute_metrics(generated_captions, ground_truths)
-        print(f"\n[Metrics] BLEU-4: {scores['bleu4']:.4f}")
-                
+            # Store Structured Result
+            inference_results.append({
+                "sample_token": item['id'],
+                "prediction": output_text,
+                "ground_truth": gt_answer,
+                "metrics": {
+                    "bleu4": bleu4,
+                    "cider": 0.0 # Placeholder (Requires corpus-based stats)
+                }
+            })
+            
+        # Calculate Overall Metrics
+        # Assuming compute_metrics is available via imports or utils
+        try:
+            from utils.metrics import compute_metrics
+            scores = compute_metrics(generated_captions, ground_truths)
+        except ImportError:
+            scores = {"bleu4": 0.0, "cider": 0.0}
+            
+        metric_log = f"\n[Metrics] Overall BLEU-4: {scores.get('bleu4', 0):.4f}\n"
+        print(metric_log)
+        
+        with open(self.output_dir / "inference_log.txt", "a") as f:
+            f.write(metric_log)
+            
+        # Save Detailed JSON
+        json_path = self.output_dir / f"inference_epoch_{epoch}.json"
+        with open(json_path, "w") as f:
+            json.dump({
+                "epoch": epoch,
+                "step": step,
+                "overall_metrics": scores,
+                "samples": inference_results
+            }, f, indent=2)
+            
         self.model.train()
+        torch.cuda.empty_cache()

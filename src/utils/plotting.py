@@ -10,6 +10,7 @@ def plot_loss_curve(
     val_losses: List[float],
     val_epochs: List[int],
     out_dir: Path,
+    filename: str = "loss_curve.png"
 ):
     """
     Plot train and validation losses.
@@ -29,28 +30,40 @@ def plot_loss_curve(
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(out_dir / "loss_curve.png", dpi=120)
+    plt.tight_layout()
+    plt.savefig(out_dir / filename, dpi=120)
     plt.close()
 
-def plot_step_loss(step_losses: List[float], out_dir: Path, window: int = 50):
+def plot_step_loss(
+    step_losses: List[float], 
+    out_dir: Path, 
+    window: int = 50,
+    val_steps: Optional[List[int]] = None,
+    val_losses: Optional[List[float]] = None
+):
     """
-    Plot step-wise loss with moving average.
+    Plot step-wise loss with moving average and optional overlaid validation points.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    plt.figure(figsize=(12, 4))
+    plt.figure(figsize=(12, 6))
     
-    plt.plot(step_losses, alpha=0.3, label="Raw Step Loss")
+    # Train Data
+    plt.plot(step_losses, alpha=0.2, color='blue', label="Raw Step Loss", linewidth=0.5)
     
     # Moving average
     if len(step_losses) >= window:
         ma = [sum(step_losses[i:i+window])/window for i in range(len(step_losses)-window+1)]
-        plt.plot(range(window-1, len(step_losses)), ma, color='red', linewidth=1.5, label=f"MA ({window})")
+        plt.plot(range(window-1, len(step_losses)), ma, color='blue', linewidth=1.5, label=f"Train MA ({window})")
+        
+    # Validation Data
+    if val_steps and val_losses:
+        plt.plot(val_steps, val_losses, 'o-', color='orange', label="Validation Loss", linewidth=2, markersize=5, markeredgecolor='black')
         
     plt.xlabel("Step")
     plt.ylabel("Loss")
-    plt.title("Step-wise Training Loss")
+    plt.title("Step-wise Training & Validation Loss")
     plt.legend()
-    plt.grid(True, alpha=0.2)
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(out_dir / "step_loss.png", dpi=120)
     plt.close()
