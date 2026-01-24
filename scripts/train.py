@@ -76,7 +76,7 @@ def get_training_config() -> dict:
         "val_every_steps": 1400,  # Validate every half-epoch (~2812/2 = 1406)
         "gradient_checkpointing": True,
         
-        "resume": False,          # Set to True to resume from latest checkpoint
+        "resume": True,           # Set to True to resume from latest checkpoint
         "resume_from_best": False,
         
         # ──────────────────────────────────────────────────────────────────

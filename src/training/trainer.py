@@ -7,7 +7,7 @@ from tqdm.auto import tqdm
 import time
 import shutil
 import glob
-from utils.plotting import plot_loss_curve, plot_step_loss
+from utils.plotting import plot_loss_curve, plot_step_loss, save_inference_comparison
 from utils.checkpoints import save_checkpoint, load_checkpoint
 from qwen_vl_utils import process_vision_info
 
@@ -37,6 +37,8 @@ class QwenTrainer:
         self.val_step_losses = [] # Track val loss per step
         self.val_steps = []
         self.epoch_losses = []
+        self.val_epoch_losses = []  # Track val loss per epoch
+        self.val_epoch_nums = []    # Track which epochs have validation
         self.best_val_loss = float('inf')
         
         
@@ -236,6 +238,11 @@ class QwenTrainer:
             # Run Validation
             val_loss = self.run_validation(epoch)
             
+            # Track epoch-level validation loss
+            if val_loss is not None:
+                self.val_epoch_losses.append(val_loss)
+                self.val_epoch_nums.append(epoch + 1)
+            
             # Run Inference Sampling every N epochs
             inference_epoch_freq = self.config.get("inference_sampling_every_epochs", 5)
             if (epoch + 1) % inference_epoch_freq == 0:
@@ -247,7 +254,8 @@ class QwenTrainer:
                 epoch + 1, global_step, avg_epoch_loss, self.output_dir, # Save as next epoch start
                 keep_last_n=self.config.get("keep_last_n", 3)
             )
-            plot_loss_curve(self.epoch_losses, [val_loss] if val_loss else [], [epoch+1] if val_loss else [], self.output_dir / "plots")
+            # Plot with ALL accumulated validation losses
+            plot_loss_curve(self.epoch_losses, self.val_epoch_losses, self.val_epoch_nums, self.output_dir / "plots")
             
             # Save Best Checkpoint
             if val_loss is not None and val_loss < self.best_val_loss:
@@ -347,75 +355,122 @@ class QwenTrainer:
         from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
         
         for idx in indices:
-            with torch.no_grad():
-                item = ds_source[idx] # Returns {id, messages, image}
-            
-            # Extract inputs
-            image = item["images"][0] # dataset returns list of images
-            messages = item["messages"] # User + Assistant
-            
-            # Construct Prompt (Filter out Assistant answer)
-            conversation = [msg for msg in messages if msg['role'] != 'assistant']
-            gt_msg = next((msg for msg in reversed(messages) if msg['role'] == 'assistant'), None)
-            gt_answer = gt_msg["content"][0]["text"] if gt_msg else "UNKNOWN"
-            
-            # Process for Inference
-            text = self.processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
-            
-            inputs = self.processor(
-                text=[text],
-                images=[image],
-                padding=True,
-                return_tensors="pt"
-            )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            
-            # Generate
-            generated_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=self.config.get("inference_max_tokens", 128),
-                do_sample=self.config.get("inference_do_sample", False),
-                num_beams=self.config.get("inference_num_beams", 1),
-                temperature=self.config.get("inference_temperature", 0.0)
-            )
-            
-            # Trim input tokens
-            generated_ids_trimmed = [
-                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
-            ]
-            
-            output_text = self.processor.batch_decode(
-                generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-            )[0]
-            
-            # Calculate Per-Sample Metrics
-            chencherry = SmoothingFunction()
-            # Basic whitespace tokenization for BLEU check
-            ref_tokens = [gt_answer.split()] 
-            hyp_tokens = output_text.split()
-            bleu4 = sentence_bleu(ref_tokens, hyp_tokens, smoothing_function=chencherry.method1)
-            
-            # Log to file and console
-            log_entry = f"\n[Sample {item['id']}]\nQ: {user_msg['content'][1]['text']}\nGT: {gt_answer}\nPred: {output_text}\nBLEU-4: {bleu4:.4f}\n"
-            print(log_entry)
-            
-            # Save string log
-            with open(self.output_dir / "inference_log.txt", "a") as f:
-                f.write(log_entry)
-            
-            generated_captions.append(output_text)
-            ground_truths.append(gt_answer)
-            
-            # Store Structured Result
-            inference_results.append({
-                "sample_token": item['id'],
-                "prediction": output_text,
-                "ground_truth": gt_answer,
-                "metrics": {
-                    "bleu4": bleu4,
-                    "cider": 0.0 # Placeholder (Requires corpus-based stats)
-                }
-            })
+            try:
+                with torch.no_grad():
+                    item = ds_source[idx] # Returns {id, messages, image}
+                
+                # Extract inputs with defensive checks
+                images = item.get("images", [])
+                if not images:
+                    print(f"[Inference] Skipping sample {idx}: No images found")
+                    continue
+                image = images[0]
+                
+                messages = item.get("messages", [])
+                if not messages:
+                    print(f"[Inference] Skipping sample {idx}: No messages found")
+                    continue
+                
+                # Construct Prompt (Filter out Assistant answer)
+                conversation = [msg for msg in messages if msg.get('role') != 'assistant']
+                gt_msg = next((msg for msg in reversed(messages) if msg.get('role') == 'assistant'), None)
+                
+                # Safely extract ground truth answer
+                gt_answer = "UNKNOWN"
+                if gt_msg and gt_msg.get("content"):
+                    content = gt_msg["content"]
+                    if isinstance(content, list) and len(content) > 0:
+                        gt_answer = content[0].get("text", "UNKNOWN")
+                    elif isinstance(content, str):
+                        gt_answer = content
+                
+                # Process for Inference
+                text = self.processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
+                
+                inputs = self.processor(
+                    text=[text],
+                    images=[image],
+                    padding=True,
+                    return_tensors="pt"
+                )
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                
+                # Generate
+                generated_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=self.config.get("inference_max_tokens", 128),
+                    do_sample=self.config.get("inference_do_sample", False),
+                    num_beams=self.config.get("inference_num_beams", 1),
+                    temperature=self.config.get("inference_temperature", 0.0)
+                )
+                
+                # Trim input tokens
+                generated_ids_trimmed = [
+                    out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
+                ]
+                
+                output_text = self.processor.batch_decode(
+                    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+                )[0]
+                
+                # Calculate Per-Sample Metrics
+                chencherry = SmoothingFunction()
+                # Basic whitespace tokenization for BLEU check
+                ref_tokens = [gt_answer.split()] 
+                hyp_tokens = output_text.split()
+                bleu4 = sentence_bleu(ref_tokens, hyp_tokens, smoothing_function=chencherry.method1)
+                
+                # Log to file and console - Extract question safely
+                user_msg = next((msg for msg in conversation if msg.get('role') == 'user'), None)
+                question_text = "N/A"
+                if user_msg and user_msg.get('content'):
+                    content = user_msg['content']
+                    if isinstance(content, list) and len(content) > 1:
+                        question_text = content[1].get('text', 'N/A') if isinstance(content[1], dict) else str(content[1])
+                    elif isinstance(content, str):
+                        question_text = content[:100]  # Truncate if string
+                
+                sample_id = item.get('id', f'idx_{idx}')
+                log_entry = f"\n[Sample {sample_id}]\nQ: {question_text}\nGT: {gt_answer}\nPred: {output_text}\nBLEU-4: {bleu4:.4f}\n"
+                print(log_entry)
+                
+                # Save string log
+                with open(self.output_dir / "inference_log.txt", "a") as f:
+                    f.write(log_entry)
+                
+                generated_captions.append(output_text)
+                ground_truths.append(gt_answer)
+                
+                # Store Structured Result
+                inference_results.append({
+                    "sample_token": sample_id,
+                    "prediction": output_text,
+                    "ground_truth": gt_answer,
+                    "metrics": {
+                        "bleu4": bleu4,
+                        "cider": 0.0 # Placeholder (Requires corpus-based stats)
+                    }
+                })
+                
+                # Save comparison image (input image + GT/Pred text)
+                try:
+                    img_path = save_inference_comparison(
+                        image=image,
+                        question=question_text,
+                        ground_truth=gt_answer,
+                        prediction=output_text,
+                        bleu_score=bleu4,
+                        sample_id=sample_id,
+                        output_dir=self.output_dir,
+                        epoch=epoch,
+                        idx=len(inference_results) - 1
+                    )
+                    print(f"[Inference] Saved comparison image: {img_path}")
+                except Exception as img_err:
+                    print(f"[Inference] Failed to save comparison image: {img_err}")
+            except Exception as e:
+                print(f"[Inference] Error processing sample {idx}: {e}")
+                continue  # Skip this sample and continue with others
             
         # Calculate Overall Metrics
         # Assuming compute_metrics is available via imports or utils
