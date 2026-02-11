@@ -47,37 +47,39 @@ def get_training_config() -> dict:
         # ──────────────────────────────────────────────────────────────────
         # I/O Paths
         # ──────────────────────────────────────────────────────────────────
-        "data_root": "/home/santhru/FYP38_First Experiment/NuScenesVQA-/scripts",
+        "data_root": "/home/santhru/FYP38_First Experiment/NuScenesVQA-",
+        "action_prediction_json": "/home/santhru/FYP38_First Experiment/NuScenesVQA-/nuscenes_action_prediction_vqa.json",
         "nusc_root": "/media/santhru/Extreme SSD1/Nuscenes Dataset/Dataset/train",
         "output_dir": "./checkpoints",
         
         # ──────────────────────────────────────────────────────────────────
-        # Data Config (~50k samples)
+        # Data Config (FULL DATASET ~25k samples)
         # ──────────────────────────────────────────────────────────────────
-        "max_samples": None,      # Use ALL samples (~50k) - set to int for testing
-        "val_split": 0.1,         # 10% for validation (~5k val, ~45k train)
+        "max_samples": None,      # Use ALL samples
+        "val_split": 0.1,         # 10% for validation (~2.5k val, ~22.5k train)
         "num_workers": 8,
-        "prefetch_factor": 1,
+        "prefetch_factor": 2,
         
         # ──────────────────────────────────────────────────────────────────
-        # Training Config for Long Run (50 epochs, ~50k samples)
-        # Steps per epoch: ~45000 / 16 = ~2812 steps/epoch
-        # Total steps: 2812 * 50 = ~140,600 steps
+        # Training Config for PRODUCTION RUN
+        # Steps per epoch: ~22500 / 4 = 5625 forward passes / 4 grad_accum = ~1406 steps
+        # Total steps: 1406 * 10 = ~14,060 steps
         # ──────────────────────────────────────────────────────────────────
-        "epochs": 50,             # 50 epochs (can stop anytime)
-        "batch_size": 2,
-        "grad_accum": 8,          # Effective batch size: 16
+        "epochs": 10,             # 10 epochs
+        "batch_size": 4,          # Batch size 4
+        "grad_accum": 4,          # Effective batch size: 16
         "lr": 2e-4,
         "weight_decay": 0.01,
-        "warmup_steps": 3000,     # ~1 epoch warmup (good for long runs)
-        "save_steps": 500,        # Frequent saves for resumability (~6 saves/epoch)
-        "keep_last_n": 5,         # Keep more checkpoints for safety
-        "plot_every": 500,        # Plot every 500 steps
-        "val_every_steps": 1400,  # Validate every half-epoch (~2812/2 = 1406)
+        "warmup_steps": 500,      # ~0.35 epoch warmup
+        "save_steps": 700,        # Save every half-epoch (~1406/2)
+        "keep_last_n": 5,         # Keep 5 checkpoints
+        "plot_every": 350,        # Plot every quarter-epoch
+        "val_every_steps": 700,   # Validate every half-epoch
         "gradient_checkpointing": True,
         
-        "resume": True,           # Set to True to resume from latest checkpoint
+        "resume": False,
         "resume_from_best": False,
+        "load_checkpoint_from": "/home/santhru/FYP38_First Experiment/NuScenesVQA-/scripts/checkpoints/run_20260120_135257/checkpoint-best",
         
         # ──────────────────────────────────────────────────────────────────
         # Model Config (Optimized for RTX 5080)
@@ -86,8 +88,36 @@ def get_training_config() -> dict:
         "use_4bit": True,
         "use_flash_attn": False,
         "use_8bit_optimizer": True,
-        "system_prompt": "You are an autonomous driving assistant. Analyze the camera images to answer questions about the driving environment, traffic rules, and scene details accurately.\n\nThinking Process:\n1. Analyze input images (Front-Left, Front, Front-Right, Back-Left, Back, Back-Right).\n2. Identify key objects and road conditions.\n3. Reason about the user question step-by-step.\n4. Formulate the final answer.",
-        "max_ans_toks": 256,
+        "system_prompt": """You are an autonomous driving action planner. Your task is to analyze the provided multi-view camera and the navigation goal to determine the immediate high-level action required.
+
+Input:
+1. Visual Context: 6-view camera grid (Front, Back, Front-Left, Front-Right, Back-Left, Back-Right).
+2. Navigation Goal: One of the following instructions from the navigation system:
+   - GO_STRAIGHT
+   - PREPARE_LEFT
+   - PREPARE_RIGHT
+   - TURN_LEFT
+   - TURN_RIGHT
+
+Output:
+Predict the specific 'action token' that safely executes the goal in the current scene. Choose strictly from the following allowed tokens:
+   - STRAIGHT_FAST
+   - STRAIGHT_SLOW
+   - LEFT_TURN
+   - LEFT_TURN_SHARP
+   - RIGHT_TURN
+   - RIGHT_TURN_SHARP
+   - U_TURN_LEFT_TIGHT
+   - U_TURN_LEFT_WIDE
+   - LEFT_SLIDE
+   - LEFT_SLIDE_GENTLE
+   - RIGHT_SLIDE
+   - RIGHT_SLIDE_GENTLE
+   - STATIONARY
+   - CREEPING
+
+You are in @ ACTION_MODE""",
+        "max_ans_toks": 64,       # Short output: {"action": "...", "maneuver": "..."}
         
         # QLoRA Config
         "lora_r": 16,
@@ -98,13 +128,13 @@ def get_training_config() -> dict:
         # ──────────────────────────────────────────────────────────────────
         # Inference Config
         # ──────────────────────────────────────────────────────────────────
-        "inference_sampling_every_epochs": 5,  # Run inference every 5 epochs
-        "inference_samples_n": 4, 
-        "inference_max_tokens": 256,
-        "inference_temperature": 0.7,
-        "inference_do_sample": True,
+        "inference_sampling_every_epochs": 1,  # Run inference every epoch
+        "inference_samples_n": 30,             # 30 samples per inference
+        "inference_max_tokens": 64,            # Short action token output
+        "inference_temperature": 0.3,          # Lower temp for deterministic actions
+        "inference_do_sample": False,          # Greedy decoding
         "inference_num_beams": 1,
-        "inference_sampling_every": 14000,     # Every 5 epochs (~2812 * 5)
+        "inference_sampling_every": 1406,      # Every epoch (~1406 steps)
         
         # ──────────────────────────────────────────────────────────────────
         # Metrics
@@ -226,9 +256,14 @@ def main():
     else:
         raise ImportError("nuscenes-devkit is required")
         
-    print(f"Searching for data...")
-    json_paths = find_json_files(config['data_root'])
-    print(f"Found {len(json_paths)} JSON annotation files.")
+    print(f"Loading action prediction data...")
+    # Use specific action prediction JSON file if configured
+    if config.get('action_prediction_json'):
+        json_paths = [config['action_prediction_json']]
+        print(f"Using action prediction JSON: {json_paths[0]}")
+    else:
+        json_paths = find_json_files(config['data_root'])
+        print(f"Found {len(json_paths)} JSON annotation files.")
     
     if len(json_paths) == 0:
         print("No data found! Exiting.")
@@ -252,6 +287,22 @@ def main():
         lora_alpha=config['lora_alpha'],
         lora_dropout=config['lora_dropout']
     )
+    
+    # Load pretrained LoRA weights if specified (NOT resuming, just loading weights)
+    if config.get('load_checkpoint_from'):
+        from peft import PeftModel
+        ckpt_path = Path(config['load_checkpoint_from'])
+        if ckpt_path.exists():
+            print(f"[Checkpoint] Loading LoRA weights from: {ckpt_path}")
+            # Load the adapter weights
+            model = PeftModel.from_pretrained(
+                model.base_model.model,  # Get base model from existing PeftModel
+                str(ckpt_path),
+                is_trainable=True
+            )
+            print(f"[Checkpoint] LoRA weights loaded successfully!")
+        else:
+            print(f"[Warning] Checkpoint path not found: {ckpt_path}")
     
     # 4. Data Splitting
     val_size = max(1, int(len(dataset) * config['val_split']))

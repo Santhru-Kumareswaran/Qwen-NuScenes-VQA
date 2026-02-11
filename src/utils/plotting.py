@@ -91,7 +91,9 @@ def save_inference_comparison(
     sample_id: str,
     output_dir: Path,
     epoch: int,
-    idx: int
+    idx: int,
+    safety_score: Optional[float] = None,
+    safety_status: Optional[str] = None
 ):
     """
     Save an inference comparison image with:
@@ -139,10 +141,20 @@ def save_inference_comparison(
     draw.text((x_text, y_cursor), f"Sample: {sample_id}", font=font_large, fill=(255, 255, 255))
     y_cursor += 35
     
-    # BLEU Score
+    # Metrics Panel
+    # 1. BLEU Score
     bleu_color = (100, 255, 100) if bleu_score > 0.3 else (255, 200, 100) if bleu_score > 0.1 else (255, 100, 100)
     draw.text((x_text, y_cursor), f"BLEU-4: {bleu_score:.4f}", font=font_large, fill=bleu_color)
-    y_cursor += 45
+    y_cursor += 35
+    
+    # 2. Safety Score (Accuracy)
+    if safety_score is not None:
+        safe_color = (100, 255, 100) if safety_score >= 0.7 else (255, 200, 100) if safety_score >= 0.5 else (255, 100, 100)
+        status = f" ({safety_status})" if safety_status else ""
+        draw.text((x_text, y_cursor), f"Safety Score: {safety_score:.1f}{status}", font=font_large, fill=safe_color)
+        y_cursor += 45
+    else:
+        y_cursor += 10
     
     # Question
     draw.text((x_text, y_cursor), "Question:", font=font_large, fill=(150, 200, 255))

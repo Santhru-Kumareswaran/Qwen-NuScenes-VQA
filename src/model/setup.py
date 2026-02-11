@@ -10,7 +10,8 @@ def setup_model_and_processor(
     lora_dropout: float = 0.1,  # Reduced dropout for QLoRA
     use_4bit: bool = True,      # QLoRA enabled by default
     use_flash_attn: bool = True, # Flash Attention 2 enabled by default
-    device_map = "auto"
+    device_map = "auto",
+    skip_lora: bool = False     # Skip LoRA creation (for loading from checkpoint)
 ):
     """
     Load Qwen VL model with QLoRA support optimized for RTX 5080 (16GB VRAM).
@@ -62,7 +63,14 @@ def setup_model_and_processor(
     if use_4bit:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
         
-    # 5. Apply LoRA
+    # 5. Apply LoRA (skip if loading from checkpoint)
+    if skip_lora:
+        print(f"[Model] Skipping LoRA creation (will load from checkpoint)")
+        print(f"[Model] Loaded base model with {'4-bit quantization' if use_4bit else 'full precision'}")
+        print(f"[Model] Attention: {attn_impl}")
+        print(f"[Model] Dtype: bf16")
+        return model, processor
+    
     # Target modules for Qwen2-VL: LLM backbone layers
     # For QLoRA, higher rank (r=16+) works better than standard LoRA
     

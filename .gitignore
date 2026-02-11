@@ -1,52 +1,34 @@
 # Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.env
-.venv
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
-# VS Code
-.vscode/
-*.code-workspace
-
-# Project Specific - Training Artifacts
+# Project specific
 checkpoints/
 output/
 logs/
 *.log
-tboard_logs/
-wandb/
-plots/
-inferences/
+inference_results*/
+openpcdet_inference_outputs/
 
-# Large Data Files (don't commit)
-*.json
-!src/**/*.json
-scripts/sample_montage.png
+# Large files
+*.zip
+*.pth
+*.pt
+*.pd
+*.pkl
 
-# OS
+# Datasets (Keep small CSVs if critical, ignore heavy ones if reproducible)
+vision_finetuning_dataset.json
+nuscenes_action_prediction_vqa.json
+# nuscenes_action_tokens.csv # Keep? User might need input data
+# nuscenes_goal_tokens_*.csv # Generated? Keep refined one?
+
+# System
 .DS_Store
-Thumbs.db
 
-# Data directories
-/DATA/*
-/data/*
+# IDE
+.vscode/
+.idea/
+
+# Archive
+archive/

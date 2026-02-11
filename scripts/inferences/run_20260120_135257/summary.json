@@ -1,0 +1,16 @@
+[
+  {
+    "id": "e202293a1bf94ed19d98bc43721c2f3a",
+    "question": "Analyze the 6-view input to understand the driving context, then generate a detailed scene summary using @SCENE_SUMMARY_MODE.",
+    "gt": "The ego vehicle is currently traveling on a two-lane road under clear, sunny conditions. Ahead on the left, a large cement mixer truck is present near a construction site, which includes a multi-story building under development and a crane in the background. The road ahead curves to the right, where a \"DETOUR\" sign indicates a change in traffic flow. In the rear, a dark minivan is approaching from behind and to the right. The primary focus should be on navigating the construction zone and preparing to follow the detour instructions, while monitoring the approaching vehicle in the rear.",
+    "pred": "Okay, let's tackle this problem. The user provided a 6-view image split into front left, front, front right, back right, back, and back left. They want me to analyze the driving context and generate a detailed scene summary using the @SCENE_SUMMARY_MODE.\n\nFirst, I need to look at each section. The front left has a building with parked cars on the left, maybe a street with some trees. The front middle is a straight road with a truck in the distance. The front right shows a corner with a building and a crosswalk. The back right is a building with cars parked, maybe a",
+    "bleu4": 0.018183387952756272
+  },
+  {
+    "id": "49471538e6b8458383d7c83676c90e23",
+    "question": "Process the scene to detect objects and compile the results into the entity list using @ENTITY_LIST_MODE.",
+    "gt": "{\"detected_entities\": [[\"vehicles\", \"Passenger vehicles\", {\"Lights\": \"Headlights ON\", \"State\": \"moving_opposite\"}, \"Front, opposite lane\"], [\"vehicles\", \"Large/Commercial vehicles\", {\"Lights\": \"Brake lights ON\", \"State\": \"braking\"}, \"Front, right side\"], [\"road_surface_anomalies\", \"Substance\", {\"Severity\": \"Moderate\", \"Appearance\": \"Standing water/wet surface\"}, \"Front\"]]}",
+    "pred": "So, let's look at each image. First, check for objects. In the FRONT LEFT: maybe a plant? Wait, no, the task is to detect objects. Let's go through each quadrant.\n\nFRONT LEFT: buildings, sidewalk, maybe a car? Wait, the images are all rainy, wet streets. Let's check each:\n\nFRONT LEFT (red): buildings, sidewalk, maybe a car on the left? Wait, the image shows a building with large windows, sidewalk. No obvious objects like cars? Wait, maybe the first image: left side, a building with a plant. Wait, no, the problem",
+    "bleu4": 0
+  }
+]

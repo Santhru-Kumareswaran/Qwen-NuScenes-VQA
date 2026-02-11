@@ -87,7 +87,8 @@ def load_checkpoint(model, optimizer, scheduler, ckpt_dir: Path):
     state_path = ckpt_dir / "trainer_state.pt"
     if state_path.exists():
         state = torch.load(state_path, map_location="cpu")
-        optimizer.load_state_dict(state['optimizer_state_dict'])
+        if optimizer:
+            optimizer.load_state_dict(state['optimizer_state_dict'])
         if scheduler and state['scheduler_state_dict']:
             scheduler.load_state_dict(state['scheduler_state_dict'])
         return state['epoch'], state['step']
