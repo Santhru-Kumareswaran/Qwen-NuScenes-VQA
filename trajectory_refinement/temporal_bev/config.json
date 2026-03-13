@@ -1,0 +1,35 @@
+{
+    "files": {
+        "csv_path": "/home/santhru/FYP38_First Experiment/nuscenes_action_tokens.csv",
+        "json_path": "/home/santhru/FYP38_First Experiment/NuScenesVQA-/action_token_templates.json",
+        "nuscenes_root": "/media/santhru/Extreme SSD1/Nuscenes Dataset/Dataset/train",
+        "output_dir": "./output/trajectory_refinement"
+    },
+    "model": {
+        "pretrained_backbone": "../checkpoints/cbgs_pp_centerpoint_nds6070.pth",
+        "num_bev_features": 384,
+        "fusion_hidden_dim": 256,
+        "traj_hidden_dim": 128,
+        "prediction_horizon": 12,
+        "num_past_sweeps": 5
+    },
+    "train": {
+        "batch_size": 4,
+        "epochs": 300,
+        "learning_rate": 0.0001,
+        "weight_decay": 0.01,
+        "workers": 8,
+        "prefetch_factor": 2,
+        "log_interval": 5,
+        "save_top_k": 3,
+        "eval_interval_steps": 50,
+        "early_stopping_patience": 10,
+        "max_samples": null,
+        "resume": true,
+        "resume_mode": "latest"
+    },
+    "eval": {
+        "test_samples": 10,
+        "batch_size": 4
+    }
+}

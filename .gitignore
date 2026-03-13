@@ -16,12 +16,29 @@ openpcdet_inference_outputs/
 *.pt
 *.pd
 *.pkl
+*.bin
+*.safetensors
 
-# Datasets (Keep small CSVs if critical, ignore heavy ones if reproducible)
+# Large datasets
 vision_finetuning_dataset.json
 nuscenes_action_prediction_vqa.json
-# nuscenes_action_tokens.csv # Keep? User might need input data
-# nuscenes_goal_tokens_*.csv # Generated? Keep refined one?
+*.csv
+
+# Action token clustering outputs
+action_token_clustering/output/
+action_token_clustering/plots/
+
+# Trajectory refinement outputs
+trajectory_refinement/*/output/
+trajectory_refinement/*/__pycache__/
+
+# Montage/image data
+camera_montages*/
+bev_frames*/
+
+# Rerun logs
+rerun_logs/
+scripts/rerun_logs/
 
 # System
 .DS_Store
